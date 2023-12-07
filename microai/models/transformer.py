@@ -1,12 +1,16 @@
+from dataclasses import dataclass, field
+from typing import Literal
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from dataclasses import dataclass, field
-
 
 @dataclass
 class TransformerConfig:
+    style: Literal["decoder", "encoder-decoder"] = field(
+        default="decoder",
+        metadata={"help": "Style of the transformer architecture"})
     vocab_size: int = field(
         default=4e3,
         metadata={"help": "Size of the vocabulary"})
@@ -101,7 +105,33 @@ class MultiHeadAttention(nn.Module):
 class DecoderBlock(nn.Module):
     def __init__(self, config: TransformerConfig):
         super().__init__()
-        self.attention = MultiHeadAttention(config, masked=True)
+        self.config = config
+        self.attention = MultiHeadAttention(config, masked=False)
+        self.masked_attention = MultiHeadAttention(config, masked=True)
+        self.ln1 = nn.LayerNorm(config.d_model)
+        self.ff = FeedForward(config)
+        self.ln2 = nn.LayerNorm(config.d_model)
+        self.ln3 = nn.LayerNorm(config.d_model) if config.style == "encoder-decoder" else None
+
+    def forward(self, x):
+        if self.config.style == "decoder":
+            x = x + self.ln1(self.masked_attention(x))
+            x = x + self.ln2(self.ff(x))
+            return x
+        elif self.config.style == "encoder-decoder":
+            input, output = x
+
+            output = output + self.ln1(self.masked_attention(output))
+            output = output + self.ln2(self.attention(input))
+            output = output + self.ln3(self.ff(output))
+
+            return input, output
+
+
+class EncoderBlock(nn.Module):
+    def __init__(self, config: TransformerConfig):
+        super().__init__()
+        self.attention = MultiHeadAttention(config, masked=False)
         self.ln1 = nn.LayerNorm(config.d_model)
         self.ff = FeedForward(config)
         self.ln2 = nn.LayerNorm(config.d_model)
@@ -115,15 +145,36 @@ class DecoderBlock(nn.Module):
 class Transformer(nn.Module):
     def __init__(self, config: TransformerConfig):
         super().__init__()
+        self.config = config
         self.embd_input = nn.Embedding(config.vocab_size, config.d_model)
+        self.embd_output = nn.Embedding(config.vocab_size, config.d_model)
         self.embd_pos = PositionalEmbedding(config)
         self.decoders = nn.Sequential(*[DecoderBlock(config) for _ in range(config.num_heads)])
+        self.encoders = nn.Sequential(*[EncoderBlock(config) for _ in range(config.num_heads)]) if config.style == "encoder-decoder" else None
         self.linear = nn.Linear(config.d_model, config.vocab_size)
         self.dropout = nn.Dropout(config.dropout) if config.dropout else None
 
     def forward(self, x):
-        x = self.embd_input(x) + self.embd_pos(x)
-        x = self.decoders(x)
-        x = self.dropout(x) if self.dropout else x
-        x = self.linear(x)
-        return x
+        if self.config.style == "decoder":
+            x = self.embd_input(x) + self.embd_pos(x)
+
+            x = self.decoders(x)
+            x = self.dropout(x) if self.dropout else x
+
+            return self.linear(x)
+        elif self.config.style == "encoder-decoder":
+            input, output = x
+
+            # encoder portion
+            input = self.embd_input(input) + self.embd_pos(input)
+            input = self.encoders(input)
+            input = self.dropout(input) if self.dropout else input
+
+            # decoder portion
+            output = self.embd_output(output) + self.embd_pos(output)
+            _, output = self.decoders((input, output))
+            output = self.dropout(output) if self.dropout else output
+
+            return self.linear(output)
+        else:
+            raise NotImplementedError("Encoder-only style is not implemented yet")
