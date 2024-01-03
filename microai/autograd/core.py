@@ -5,11 +5,11 @@ from typing import List, Union
 
 class Variable:
     def __init__(self, value: Union[float, int] = None,  children: List["Variable"] = [], label: str = None):
-        self.label = label
-        self._children = children
-        self._value = value if value is not None else None
-        self._grad = 0.0
-        self._forward() # ensure .data is always defined
+        self.label = label                                 # only used for visualization of the computational graph
+        self._children = children                          # keeps reference to children of this variable
+        self._value = value if value is not None else None # keeps reference to the value of this variable
+        self._grad = 0.0                                   # keeps reference to the gradient of this variable
+        self._forward()                                    # initialize _value
 
     @property
     def data(self):
@@ -23,13 +23,10 @@ class Variable:
         self._backward(1.0 if grad is None else grad)
 
     def _forward(self):
-        pass
+        pass # nothing to do here in case variable encapsulates a number
 
     def _backward(self, grad: float):
         self._grad += grad
-
-    def _to_var(self, other: float | int | None) -> "Variable":
-        return Variable(other) if isinstance(other, int) or isinstance(other, float) else other
 
     def exp(self) -> "Variable":
         return ExpVariable(children=[self])
@@ -72,6 +69,9 @@ class Variable:
 
     def __repr__(self) -> str:
         return f"Var(data={self.data:.2f}, grad={self.grad:.2f}, label={self.label})"
+
+    def _to_var(self, other: float | int | None) -> "Variable":
+        return Variable(other) if isinstance(other, int) or isinstance(other, float) else other
 
 
 class AddVariable(Variable):
